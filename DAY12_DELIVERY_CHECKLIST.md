@@ -510,35 +510,6 @@ Output:
 {"access_token":"<JWT_TOKEN>","token_type":"bearer","expires_in_minutes":60,"hint":"Include in header: Authorization: Bearer eyJhbGciOiJIUzI1NiIs..."}
 ```
 
-Test sai endpoint protected:
-```bash
-TOKEN="<JWT_TOKEN>"
-curl http://localhost:8000/auth/ask -X POST \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"question": "Explain JWT"}'
-```
-
-Output:
-```json
-{"detail":"Not Found"}
-```
-
-Nhận xét: endpoint hỏi agent đúng là `/ask`, không phải `/auth/ask`.
-
-Trong lúc copy/paste terminal, có lần paste lẫn cả prompt Bash:
-```text
-ThePake@AX16PRO MINGW64 ...
-```
-
-Output lỗi:
-```text
-bash: syntax error near unexpected token `('
-bash: $: command not found
-```
-
-Nhận xét: đây là lỗi thao tác terminal, không phải lỗi app. Chỉ nên paste phần command, không paste prompt.
-
 Gọi protected endpoint đúng bằng Bearer token:
 ```bash
 TOKEN="<JWT_TOKEN>"
