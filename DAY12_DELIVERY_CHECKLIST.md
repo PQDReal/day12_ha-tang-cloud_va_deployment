@@ -250,8 +250,155 @@ Kết luận Exercise 2.4: Docker Compose stack đã chạy thành công qua Ngi
 ## Part 3: Cloud Deployment
 
 ### Exercise 3.1: Railway deployment
-- URL: https://your-app.railway.app
-- Screenshot: [Link to screenshot in repo]
+- URL: https://docker-tutorial-production-cace.up.railway.app
+- Screenshot: chưa thêm vào repo ở thời điểm ghi nhận này.
+
+Các biến môi trường đã set trên Railway:
+```bash
+railway variables set PORT=8000
+railway variables set AGENT_API_KEY=my-secret-key
+```
+
+Output:
+```text
+Set variables PORT
+Set variables AGENT_API_KEY
+```
+
+Tạo/lấy service domain:
+```bash
+railway domain
+```
+
+Output:
+```text
+Service Domain created:
+https://docker-tutorial-production-cace.up.railway.app
+```
+
+Lỗi khi dùng domain mẫu trong tài liệu:
+```bash
+curl http://student-agent-domain/health
+curl http://student-agent-domain/ask -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"question": ""}'
+```
+
+Output:
+```text
+curl: (6) Could not resolve host: student-agent-domain
+```
+
+Nhận xét: `student-agent-domain` chỉ là placeholder trong `CODE_LAB.md`, cần thay bằng domain thật Railway cấp.
+
+Health check với domain thật:
+```bash
+curl https://docker-tutorial-production-cace.up.railway.app/health
+```
+
+Output:
+```json
+{"status":"ok","uptime_seconds":344.0,"platform":"Railway","timestamp":"2026-06-12T09:12:46.706419+00:00"}
+```
+
+Test `/ask` với question rỗng:
+```bash
+curl https://docker-tutorial-production-cace.up.railway.app/ask -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"question": ""}'
+```
+
+Output:
+```json
+{"detail":"question required"}
+```
+
+Nhận xét: endpoint hoạt động và validate input đúng; question rỗng bị từ chối.
+
+Lỗi quote trong Git Bash:
+```bash
+curl https://docker-tutorial-production-cace.up.railway.app/ask -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What's your condition?"}'
+```
+
+Kết quả: terminal chuyển sang prompt `>` và phải `Ctrl+C` vì dấu `'` trong `What's` làm vỡ chuỗi single-quote của Bash.
+
+Lỗi sai endpoint:
+```bash
+curl https://docker-tutorial-production-cace.up.railway.app/askk -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"question": "How are you?"}'
+```
+
+Output:
+```json
+{"detail":"Not Found"}
+```
+
+Test `/ask` thành công:
+```bash
+curl https://docker-tutorial-production-cace.up.railway.app/ask -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"question": "How are you?"}'
+```
+
+Output:
+```json
+{"question":"How are you?","answer":"Agent đang hoạt động tốt! (mock response) Hỏi thêm câu hỏi đi nhé.","platform":"Railway"}
+```
+
+Kết luận Exercise 3.1: Railway deployment thành công. Public URL hoạt động, `/health` trả `200 OK`, `/ask` nhận JSON body đúng và trả response từ mock LLM.
+
+### Exercise 3.2: Render deployment
+
+- URL: https://ai-agent-f10k.onrender.com
+- Blueprint path dùng trên Render: `03-cloud-deployment/render/render.yaml`
+- Ghi chú cấu hình: đã sửa `render.yaml` để thêm `ipAllowList: []` cho Redis và `rootDir: 03-cloud-deployment/railway` cho web service, vì Render build từ root repo nếu không chỉ định root directory.
+
+Health check:
+```bash
+curl https://ai-agent-f10k.onrender.com/health
+```
+
+Output:
+```json
+{"status":"ok","uptime_seconds":71.7,"platform":"Railway","timestamp":"2026-06-12T09:44:12.988829+00:00"}
+```
+
+Lỗi khi POST vào root `/`:
+```bash
+curl https://ai-agent-f10k.onrender.com -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Hello from Render"}'
+```
+
+Output:
+```json
+{"detail":"Method Not Allowed"}
+```
+
+Nhận xét: root `/` chỉ hỗ trợ `GET`, nên POST vào root trả `405 Method Not Allowed`. Endpoint đúng để hỏi agent là `/ask`.
+
+Test `/ask` thành công:
+```bash
+curl https://ai-agent-f10k.onrender.com/ask -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Hello from Render"}'
+```
+
+Output:
+```json
+{"question":"Hello from Render","answer":"Agent đang hoạt động tốt! (mock response) Hỏi thêm câu hỏi đi nhé.","platform":"Railway"}
+```
+
+So sánh `render.yaml` và `railway.toml`:
+- `railway.toml` cấu hình build/deploy cho một service Railway, dùng `startCommand`, `healthcheckPath`, restart policy và set biến môi trường qua Railway CLI/Dashboard.
+- `render.yaml` là Blueprint IaC, có thể khai báo nhiều service cùng lúc như web service `ai-agent` và Redis `agent-cache`.
+- Render cần chỉ rõ `rootDir` trong repo dạng monorepo/folder lab; Railway deploy trực tiếp từ folder `03-cloud-deployment/railway`.
+- Render Redis yêu cầu `ipAllowList`; Railway example không khai báo Redis service trong `railway.toml`.
+
+Kết luận Exercise 3.2: Render deployment thành công. Public URL hoạt động, `/health` trả `200 OK`, và `/ask` trả response đúng khi gọi đúng endpoint.
 
 ## Part 4: API Security
 
