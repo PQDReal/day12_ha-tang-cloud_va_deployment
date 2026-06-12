@@ -526,6 +526,51 @@ Output:
 
 Kết luận Exercise 4.2: JWT authentication hoạt động. Token lấy thành công từ `/auth/token`, sau đó dùng header `Authorization: Bearer <token>` để gọi `/ask`. Response có `requests_remaining`, cho thấy request đã đi qua security stack và rate limiter.
 
+#### Exercise 4.3: Rate limiting
+
+Đọc `rate_limiter.py`:
+- Algorithm được dùng: Sliding Window Counter.
+- Mỗi user có một deque lưu timestamp request trong window 60 giây.
+- Mỗi request mới sẽ xóa các timestamp cũ hơn 60 giây, sau đó đếm số request còn lại trong window.
+- Nếu số request trong window đạt limit, app raise `HTTPException(status_code=429)`.
+
+Limit:
+- User thường: `10 requests / 60 giây`.
+- Admin: `100 requests / 60 giây`.
+
+Cách bypass/ưu tiên cho admin:
+- Trong `app.py`, app chọn limiter theo role trong JWT:
+```python
+limiter = rate_limiter_admin if role == "admin" else rate_limiter_user
+```
+- Admin không bypass hoàn toàn, nhưng có quota cao hơn nhiều (`100 req/min` thay vì `10 req/min`).
+
+Test gọi liên tục 20 lần:
+```bash
+for i in {1..20}; do
+  curl http://localhost:8000/ask -X POST \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"question": "Test '$i'"}'
+  echo ""
+done
+```
+
+Output rút gọn:
+```json
+{"question":"Test 1","answer":"Tôi là AI agent được deploy lên cloud. Câu hỏi của bạn đã được nhận.","usage":{"requests_remaining":9,"budget_remaining_usd":1.9e-05}}
+{"question":"Test 2","answer":"Agent đang hoạt động tốt! (mock response) Hỏi thêm câu hỏi đi nhé.","usage":{"requests_remaining":8,"budget_remaining_usd":3.5e-05}}
+{"question":"Test 3","answer":"Agent đang hoạt động tốt! (mock response) Hỏi thêm câu hỏi đi nhé.","usage":{"requests_remaining":7,"budget_remaining_usd":5.1e-05}}
+...
+{"question":"Test 10","answer":"Tôi là AI agent được deploy lên cloud. Câu hỏi của bạn đã được nhận.","usage":{"requests_remaining":0,"budget_remaining_usd":0.000188}}
+{"detail":{"error":"Rate limit exceeded","limit":10,"window_seconds":60,"retry_after_seconds":57}}
+{"detail":{"error":"Rate limit exceeded","limit":10,"window_seconds":60,"retry_after_seconds":56}}
+...
+{"detail":{"error":"Rate limit exceeded","limit":10,"window_seconds":60,"retry_after_seconds":54}}
+```
+
+Kết luận Exercise 4.3: rate limiting hoạt động đúng. 10 request đầu của user `student` thành công, `requests_remaining` giảm từ 9 xuống 0. Từ request thứ 11 trở đi, app trả lỗi rate limit với limit `10`, window `60` giây và `retry_after_seconds`.
+
 ### Exercise 4.4: Cost guard implementation
 [Explain your approach]
 
