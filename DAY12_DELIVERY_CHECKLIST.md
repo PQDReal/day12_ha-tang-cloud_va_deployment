@@ -20,27 +20,232 @@ Create a file `MISSION_ANSWERS.md` with your answers to all exercises:
 ## Part 1: Localhost vs Production
 
 ### Exercise 1.1: Anti-patterns found
-1. [Your answer]
-2. [Your answer]
-...
+1. Hardcode secret trực tiếp trong mã nguồn: `OPENAI_API_KEY = "sk-hardcoded-fake-key-never-do-this"` và `DATABASE_URL = "postgresql://admin:password123@localhost:5432/mydb"`.
+2. Không có cơ chế cấu hình theo môi trường: `DEBUG`, `MAX_TOKENS`, host và port đều bị cố định trong code thay vì đọc từ biến môi trường.
+3. Bật chế độ debug/reload khi chạy app: `reload=True`, phù hợp khi phát triển local nhưng không an toàn cho production.
+4. App bind vào `localhost`, nên không thể nhận kết nối từ bên ngoài máy/container.
+5. Port bị hardcode là `8000`; các nền tảng cloud thường inject biến môi trường `PORT`.
+6. Bản develop không có endpoint `/health` hoặc `/ready`, nên cloud platform không thể kiểm tra liveness/readiness.
+7. Dùng `print()` để debug thay vì structured logging.
+8. Log cả API key, có thể làm lộ secret trong terminal hoặc cloud logs.
+9. Không có graceful shutdown hoặc lifecycle cleanup.
+
+### Exercise 1.2: Output khi chạy bản basic
+
+Lệnh chạy:
+```bash
+cd 01-localhost-vs-production/develop
+python app.py
+curl http://localhost:8000/ask -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Hello"}'
+```
+
+Output server quan sát được:
+```text
+Starting agent on localhost:8000...
+INFO:     Uvicorn running on http://localhost:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [1836] using WatchFiles
+INFO:     Started server process [2508]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     127.0.0.1:53236 - "POST /ask HTTP/1.1" 422 Unprocessable Entity
+```
+
+Output curl quan sát được:
+```json
+{"detail":[{"type":"missing","loc":["query","question"],"msg":"Field required","input":null}]}
+```
+
+Nhận xét: bản develop có chạy được, nhưng endpoint `/ask` được khai báo là `ask_agent(question: str)`, nên FastAPI hiểu `question` là query parameter. Trong khi đó lệnh curl của lab gửi dữ liệu bằng JSON body, vì vậy request trả về lỗi `422`. Đây là một phát hiện quan trọng về production-readiness: hợp đồng API giữa client và server chưa rõ ràng/chưa nhất quán.
 
 ### Exercise 1.3: Comparison table
 | Feature | Develop | Production | Why Important? |
 |---------|---------|------------|----------------|
-| Config  | ...     | ...        | ...            |
-...
+| Config | Hardcode trực tiếp trong `app.py` | Đọc từ biến môi trường thông qua `config.py` / `.env` | Cho phép cấu hình khác nhau giữa local/staging/production mà không cần sửa code, đồng thời tránh commit secret |
+| Secrets | API key giả và DB URL bị hardcode, thậm chí còn bị log ra | `.env.example` mô tả các secret cần có; giá trị thật lấy từ môi trường | Tránh lộ secret trên Git và cloud logs |
+| Host/Port | `host="localhost"`, `port=8000` | Dùng biến môi trường `HOST` và `PORT`, mặc định `0.0.0.0:8000` | Cần thiết cho Docker/Railway/Render vì platform route traffic vào port được inject |
+| Request body | Endpoint develop mong đợi query parameter, nên curl gửi JSON trả `422` | Endpoint production đọc JSON body và validate trường `question` | Hợp đồng API rõ ràng giúp tránh mismatch giữa client và server |
+| Health check | Không có | `/health` trả status, uptime, version, environment, timestamp | Cloud platform và monitoring có thể phát hiện container lỗi |
+| Readiness check | Không có | `/ready` trả trạng thái sẵn sàng hoặc `503` | Load balancer có thể ngừng route traffic khi app chưa khởi tạo xong |
+| Logging | Dùng `print()` debug và log cả secret | Structured JSON logging, không log secret | Log dễ parse/tìm kiếm hơn và an toàn hơn trong production |
+| Shutdown | Không có lifecycle handling | Có lifespan startup/shutdown và SIGTERM handler | Hỗ trợ graceful shutdown khi deploy/restart |
+| CORS | Không cấu hình | Allowed origins có thể cấu hình | Tích hợp browser/API an toàn hơn |
+| Debug reload | Luôn `reload=True` | Chỉ reload khi `DEBUG=true` | Tránh reloader process và overhead không cần thiết trong production |
+
+Output khi chạy bản production:
+```bash
+cd 01-localhost-vs-production/production
+cp .env.example .env
+pip install -r requirements.txt
+python app.py
+curl http://localhost:8000/ask -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Hello"}'
+```
+
+Output server quan sát được:
+```text
+WARNING:root:OPENAI_API_KEY not set — using mock LLM
+INFO:     Started server process [4416]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:56795 - "POST /ask HTTP/1.1" 200 OK
+```
+
+Output curl quan sát được:
+```json
+{"question":"Hello","answer":"Tôi là AI agent được deploy lên cloud. Câu hỏi của bạn đã được nhận.","model":"gpt-4o-mini"}
+```
+
+Kết luận Part 1: bản production khắc phục các anti-pattern chính của bản localhost bằng cách dùng cấu hình từ môi trường, xử lý JSON request đúng hơn, bổ sung health/readiness endpoints, structured logging và graceful lifecycle handling. Bản develop hữu ích để minh họa vì sao "chạy được trên máy mình" vẫn chưa đủ để deploy lên production.
 
 ## Part 2: Docker
 
 ### Exercise 2.1: Dockerfile questions
-1. Base image: [Your answer]
-2. Working directory: [Your answer]
-...
+1. Base image: bản develop dùng `python:3.11`. Đây là full Python image nên dễ hiểu và dễ debug, nhưng kích thước lớn.
+2. Working directory: `/app`. Đây là thư mục làm việc bên trong container, nơi copy code và chạy ứng dụng.
+3. Vì sao copy `requirements.txt` trước: Docker cache theo layer. Nếu dependencies không đổi, layer `pip install` được cache lại; chỉ thay đổi code thì build nhanh hơn.
+4. `CMD` vs `ENTRYPOINT`: `CMD` là lệnh mặc định và dễ override khi `docker run`; `ENTRYPOINT` cố định command chính của container hơn, thường dùng khi image luôn chạy một executable cụ thể.
+
+### Exercise 2.2: Build và run basic container
+
+Lệnh build đúng cần chạy từ project root vì Dockerfile dùng path `02-docker/develop/...` và `utils/...`:
+```bash
+cd day12_ha-tang-cloud_va_deployment
+docker build -f 02-docker/develop/Dockerfile -t my-agent:develop .
+docker run -p 8000:8000 my-agent:develop
+```
+
+Output container:
+```text
+INFO:     Started server process [1]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     172.17.0.1:49384 - "POST /ask HTTP/1.1" 422 Unprocessable Entity
+INFO:     172.17.0.1:35744 - "POST /ask HTTP/1.1" 422 Unprocessable Entity
+INFO:     172.17.0.1:52794 - "POST /ask HTTP/1.1" 422 Unprocessable Entity
+```
+
+Lệnh test theo `CODE_LAB.md`:
+```bash
+curl http://localhost:8000/ask -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is Docker?"}'
+```
+
+Output:
+```json
+{"detail":[{"type":"missing","loc":["query","question"],"msg":"Field required","input":null}]}
+```
+
+Nhận xét: container đã chạy thành công, nhưng endpoint vẫn trả `422` khi gửi JSON body vì code bản develop khai báo `question: str`, khiến FastAPI hiểu `question` là query parameter. Docker đóng gói đúng hành vi hiện có của app; nó không tự sửa mismatch trong API contract.
+
+### Exercise 2.3: Multi-stage build
+
+Stage 1 `builder`:
+- Dùng `python:3.11-slim AS builder`.
+- Cài build dependencies như `gcc`, `libpq-dev`.
+- Cài Python packages bằng `pip install --user` vào `/root/.local`.
+
+Stage 2 `runtime`:
+- Dùng `python:3.11-slim AS runtime`.
+- Tạo non-root user `appuser`.
+- Chỉ copy dependencies đã cài từ builder và source code cần thiết.
+- Thêm `HEALTHCHECK`.
+- Chạy app bằng `uvicorn`.
+
+Vì sao image nhỏ hơn: runtime image không giữ build tools/compiler/cache không cần thiết, chỉ giữ runtime Python, dependencies đã cài và source code.
+
+Lưu ý khi build: Dockerfile production cũng cần build từ project root, không phải từ `02-docker/production`, vì có các dòng `COPY 02-docker/production/...` và `COPY utils/mock_llm.py ...`.
+
+Output kiểm tra image size trong PowerShell:
+```powershell
+docker images my-agent:develop
+```
+
+```text
+i Info ->   U  In Use
+IMAGE              ID             DISK USAGE   CONTENT SIZE   EXTRA
+my-agent:develop   79217902bec3       1.66GB          424MB    U
+```
 
 ### Exercise 2.3: Image size comparison
-- Develop: [X] MB
-- Production: [Y] MB
-- Difference: [Z]%
+- Develop: `1.66GB`
+- Production / Advanced: `236MB`
+- Difference: giảm khoảng `85.8%` so với image develop.
+
+Output kiểm tra image trong Git Bash:
+```bash
+docker images | grep my-agent
+```
+
+```text
+my-agent:advanced   97bac46884b5        236MB         56.6MB
+my-agent:develop    79217902bec3       1.66GB          424MB
+my-agent:latest     18ec8bd8d8d4       1.66GB          424MB
+```
+
+Output kiểm tra riêng image develop trong PowerShell/Docker Desktop:
+```powershell
+docker images my-agent:develop
+```
+
+```text
+i Info ->   U  In Use
+IMAGE              ID             DISK USAGE   CONTENT SIZE   EXTRA
+my-agent:develop   79217902bec3       1.66GB          424MB    U
+```
+
+Ghi chú môi trường: trong Git Bash/MINGW64 dùng `grep`; trong PowerShell mới dùng `Select-String`.
+
+### Exercise 2.4: Docker Compose stack
+
+Architecture diagram:
+```text
+Client
+  |
+  v
+Nginx reverse proxy / load balancer :80
+  |
+  v
+Agent FastAPI service :8000
+  |
+  +--> Redis :6379, dùng cho cache/session/rate limiting
+  |
+  +--> Qdrant :6333, vector database cho RAG
+```
+
+Các service trong `docker-compose.yml`:
+- `agent`: FastAPI AI agent, build từ Dockerfile production.
+- `redis`: cache/session/rate limiting.
+- `qdrant`: vector database.
+- `nginx`: reverse proxy/load balancer, expose port `80` và `443`.
+
+Nhận xét: stack production mô phỏng kiến trúc deploy thực tế hơn bản single container, với reverse proxy phía trước và backing services phía sau.
+
+Output test Docker Compose stack:
+```bash
+curl http://localhost/health
+```
+
+```json
+{"status":"ok","uptime_seconds":152.9,"version":"2.0.0","timestamp":"2026-06-12T08:43:20.986226"}
+```
+
+```bash
+curl http://localhost/ask -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Explain microservices"}'
+```
+
+```json
+{"answer":"Tôi là AI agent được deploy lên cloud. Câu hỏi của bạn đã được nhận."}
+```
+
+Kết luận Exercise 2.4: Docker Compose stack đã chạy thành công qua Nginx tại `http://localhost`. `/health` trả `200 OK`, và `/ask` nhận JSON body đúng ở bản production stack.
 
 ## Part 3: Cloud Deployment
 
