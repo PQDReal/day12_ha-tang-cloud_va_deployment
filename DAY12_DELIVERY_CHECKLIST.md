@@ -474,6 +474,87 @@ curl http://localhost:8000/ask -X POST \
   -d '{"question": "Hello"}'
 ```
 
+#### Exercise 4.2: JWT authentication
+
+Đọc `auth.py`:
+- JWT flow gồm: user gửi username/password tới endpoint login, server tạo JWT chứa `sub`, `role`, `iat`, `exp`, sau đó client gửi token trong header `Authorization: Bearer <token>`.
+- Secret ký token lấy từ `JWT_SECRET`, nếu không set thì dùng mặc định `super-secret-change-in-production-please`.
+- Token dùng thuật toán `HS256` và hết hạn sau 60 phút.
+- Demo users trong code là `student/demo123` role `user` và `teacher/teach456` role `admin`.
+
+Lệnh trong `CODE_LAB.md` dùng endpoint `/token` và credential `admin/secret`, nhưng code hiện tại dùng endpoint thật là `/auth/token` và demo users khác.
+
+Test endpoint theo tài liệu:
+```bash
+curl http://localhost:8000/token -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "secret"}'
+```
+
+Output:
+```json
+{"detail":"Not Found"}
+```
+
+Nhận xét: `/token` không tồn tại trong app hiện tại nên trả `404 Not Found`.
+
+Lấy token đúng qua `/auth/token`:
+```bash
+curl http://localhost:8000/auth/token -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"username": "student", "password": "demo123"}'
+```
+
+Output:
+```json
+{"access_token":"<JWT_TOKEN>","token_type":"bearer","expires_in_minutes":60,"hint":"Include in header: Authorization: Bearer eyJhbGciOiJIUzI1NiIs..."}
+```
+
+Test sai endpoint protected:
+```bash
+TOKEN="<JWT_TOKEN>"
+curl http://localhost:8000/auth/ask -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Explain JWT"}'
+```
+
+Output:
+```json
+{"detail":"Not Found"}
+```
+
+Nhận xét: endpoint hỏi agent đúng là `/ask`, không phải `/auth/ask`.
+
+Trong lúc copy/paste terminal, có lần paste lẫn cả prompt Bash:
+```text
+ThePake@AX16PRO MINGW64 ...
+```
+
+Output lỗi:
+```text
+bash: syntax error near unexpected token `('
+bash: $: command not found
+```
+
+Nhận xét: đây là lỗi thao tác terminal, không phải lỗi app. Chỉ nên paste phần command, không paste prompt.
+
+Gọi protected endpoint đúng bằng Bearer token:
+```bash
+TOKEN="<JWT_TOKEN>"
+curl http://localhost:8000/ask -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Explain JWT"}'
+```
+
+Output:
+```json
+{"question":"Explain JWT","answer":"Agent đang hoạt động tốt! (mock response) Hỏi thêm câu hỏi đi nhé.","usage":{"requests_remaining":9,"budget_remaining_usd":1.6e-05}}
+```
+
+Kết luận Exercise 4.2: JWT authentication hoạt động. Token lấy thành công từ `/auth/token`, sau đó dùng header `Authorization: Bearer <token>` để gọi `/ask`. Response có `requests_remaining`, cho thấy request đã đi qua security stack và rate limiter.
+
 ### Exercise 4.4: Cost guard implementation
 [Explain your approach]
 
