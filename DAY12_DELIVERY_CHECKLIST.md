@@ -783,6 +783,169 @@ Sau khi test xong đã chạy:
 ```bash
 docker compose down
 ```
+
+## Part 6: Final Project
+
+### Production-ready agent implementation
+
+Đã hoàn thiện final agent trong thư mục `06-lab-complete` theo yêu cầu của `CODE_LAB.md`.
+
+Các thành phần chính:
+- `app/main.py`: FastAPI app với `/health`, `/ready`, `/ask`, `/history/{user_id}`, `/metrics`.
+- `app/config.py`: cấu hình theo environment variables, validate `AGENT_API_KEY` khi chạy production.
+- `app/auth.py`: API key authentication bằng header `X-API-Key`.
+- `app/rate_limiter.py`: sliding-window rate limit `10 req/min/user`, dùng Redis khi có `REDIS_URL`.
+- `app/cost_guard.py`: cost guard `$10/tháng/user`, key theo tháng và có Redis backend.
+- `app/storage.py`: lớp storage Redis với fallback memory cho local development.
+- `Dockerfile`: multi-stage build, chạy non-root user, có healthcheck.
+- `docker-compose.yml`: stack local gồm agent, Redis, Nginx load balancer.
+- `railway.toml`: cấu hình Railway deploy bằng Dockerfile, healthcheck `/health`.
+
+### Validation script
+
+Chạy:
+```bash
+cd 06-lab-complete
+python check_production_ready.py
+```
+
+Output:
+```text
+Result: 20/20 checks passed (100%)
+PRODUCTION READY
+```
+
+### Local test
+
+Đã chạy app local trên port riêng và test:
+- `/health` trả `200 OK`.
+- `/ready` trả `200 OK`.
+- `/ask` không có API key trả `401`.
+- `/ask` có API key trả `200 OK`.
+- `/history/{user_id}` lưu và đọc lại được conversation history.
+
+Ghi chú: local Docker validation của Part 6 chưa chạy được ở thời điểm test vì Docker Desktop không kết nối được Docker API pipe. Phần code và readiness script vẫn pass, sau đó đã deploy/test trực tiếp trên Railway.
+
+### Railway deployment
+
+Platform: Railway
+
+Project:
+```text
+lab12-final-agent
+```
+
+Public URL:
+```text
+https://lab12-final-agent-production.up.railway.app
+```
+
+Railway services:
+- `lab12-final-agent`: Online.
+- `Redis`: Online, dùng làm backing service cho history, rate limit và cost guard.
+
+Biến môi trường đã set trên Railway:
+- `ENVIRONMENT=production`
+- `AGENT_API_KEY=<set trong Railway variables>`
+- `REDIS_URL=<Redis internal URL từ Railway>`
+- `RATE_LIMIT_PER_MINUTE=10`
+- `MONTHLY_BUDGET_USD=10.0`
+
+Lỗi deploy đã gặp và cách sửa:
+- Lần deploy đầu fail vì `startCommand` dùng `--port $PORT`; Railway truyền literal `$PORT` vào Uvicorn nên lỗi: `'$PORT' is not a valid integer`.
+- Đã sửa `railway.toml` thành:
+```toml
+startCommand = "sh -c 'python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 2'"
+```
+
+Sau khi redeploy:
+```text
+status: Online
+url: https://lab12-final-agent-production.up.railway.app
+deployment ID: abb06945-4983-4a76-9177-938d6b923cb1
+```
+
+### Public URL tests
+
+Health check:
+```bash
+curl https://lab12-final-agent-production.up.railway.app/health
+```
+
+Output:
+```json
+{"status":"ok","version":"1.0.0","environment":"production","uptime_seconds":30.6,"total_requests":2,"checks":{"llm":"mock"},"timestamp":"2026-06-12T13:58:55.291756+00:00"}
+```
+
+Readiness check:
+```bash
+curl https://lab12-final-agent-production.up.railway.app/ready
+```
+
+Output:
+```json
+{"ready":true,"storage":"redis"}
+```
+
+Auth required:
+```bash
+curl -X POST https://lab12-final-agent-production.up.railway.app/ask \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"railway-test-nokey","question":"No key test"}'
+```
+
+Kết quả:
+```text
+401 Unauthorized
+```
+
+API test có authentication:
+```bash
+curl -X POST https://lab12-final-agent-production.up.railway.app/ask \
+  -H "X-API-Key: <AGENT_API_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"railway-test","question":"Hello from final Railway deploy"}'
+```
+
+Output rút gọn:
+```json
+{"user_id":"railway-test","question":"Hello from final Railway deploy","model":"gpt-4o-mini","history_length":2,"usage":{"user_id":"railway-test","month":"2026-06","cost_usd":0.000021,"budget_usd":10.0,"budget_remaining_usd":9.999979,"budget_used_pct":0.0}}
+```
+
+History test:
+```bash
+curl https://lab12-final-agent-production.up.railway.app/history/railway-test \
+  -H "X-API-Key: <AGENT_API_KEY>"
+```
+
+Output rút gọn:
+```json
+{"user_id":"railway-test","count":2,"messages":[{"role":"user","content":"Hello from final Railway deploy"},{"role":"assistant","content":"Deployment là quá trình đưa code từ máy bạn lên server để người khác dùng được."}]}
+```
+
+Rate limit test:
+```powershell
+for ($i=1; $i -le 11; $i++) {
+  # POST /ask với cùng user_id railway-limit-test
+}
+```
+
+Output:
+```text
+1: 200
+2: 200
+3: 200
+4: 200
+5: 200
+6: 200
+7: 200
+8: 200
+9: 200
+10: 200
+11: 429
+```
+
+Kết luận Part 6: final agent đã đạt các yêu cầu chính: REST API hoạt động, có conversation history trong Redis, Docker multi-stage, config từ env vars, API key auth, rate limiting, cost guard, health/readiness checks, graceful shutdown, stateless design, structured JSON logging và public URL Railway hoạt động.
 ```
 
 ---
