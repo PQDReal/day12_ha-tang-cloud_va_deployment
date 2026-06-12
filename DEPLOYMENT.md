@@ -1,43 +1,43 @@
-# Deployment Information
+# Thông Tin Triển Khai
 
 ## Public URL
 
 https://lab12-final-agent-production.up.railway.app
 
-## Platform
+## Nền tảng
 
 Railway
 
-## Services
+## Dịch vụ đang chạy
 
-- `lab12-final-agent`: FastAPI production agent
-- `Redis`: backing service for conversation history, rate limiting, and cost guard
+- `lab12-final-agent`: FastAPI production agent.
+- `Redis`: backing service dùng để lưu conversation history, rate limiting và cost guard.
 
-## Test Commands
+## Lệnh kiểm tra
 
-### Health Check
+### Health check
 
 ```bash
 curl https://lab12-final-agent-production.up.railway.app/health
 ```
 
-Expected:
+Kết quả mong đợi:
 ```json
 {"status":"ok"}
 ```
 
-### Readiness Check
+### Readiness check
 
 ```bash
 curl https://lab12-final-agent-production.up.railway.app/ready
 ```
 
-Expected:
+Kết quả mong đợi:
 ```json
 {"ready":true,"storage":"redis"}
 ```
 
-### Authentication Required
+### Kiểm tra bắt buộc xác thực
 
 ```bash
 curl -X POST https://lab12-final-agent-production.up.railway.app/ask \
@@ -45,9 +45,9 @@ curl -X POST https://lab12-final-agent-production.up.railway.app/ask \
   -d '{"user_id":"test","question":"Hello"}'
 ```
 
-Expected: `401 Unauthorized`
+Kết quả mong đợi: `401 Unauthorized`, vì request chưa gửi header `X-API-Key`.
 
-### API Test With Authentication
+### Kiểm tra API có xác thực
 
 ```bash
 curl -X POST https://lab12-final-agent-production.up.railway.app/ask \
@@ -56,18 +56,28 @@ curl -X POST https://lab12-final-agent-production.up.railway.app/ask \
   -d '{"user_id":"test","question":"Hello"}'
 ```
 
-Expected: `200 OK` with an agent response, usage info, and `history_length`.
+Kết quả mong đợi: `200 OK`, có câu trả lời từ agent, thông tin usage và `history_length`.
 
-### History Test
+### Kiểm tra conversation history
 
 ```bash
 curl https://lab12-final-agent-production.up.railway.app/history/test \
   -H "X-API-Key: <AGENT_API_KEY>"
 ```
 
-Expected: stored user and assistant messages for `user_id=test`.
+Kết quả mong đợi: trả về các message của user và assistant đã được lưu cho `user_id=test`.
 
-## Environment Variables Set
+### Kiểm tra rate limit
+
+Gửi hơn 10 request trong vòng 60 giây với cùng một `user_id`.
+
+Kết quả mong đợi:
+```text
+Request 1-10: 200 OK
+Request 11: 429 Too Many Requests
+```
+
+## Biến môi trường đã set trên Railway
 
 - `ENVIRONMENT=production`
 - `AGENT_API_KEY`
@@ -75,21 +85,22 @@ Expected: stored user and assistant messages for `user_id=test`.
 - `RATE_LIMIT_PER_MINUTE=10`
 - `MONTHLY_BUDGET_USD=10.0`
 
-## Validation
+## Kiểm tra production readiness
 
 ```bash
 cd 06-lab-complete
 python check_production_ready.py
 ```
 
-Result:
+Kết quả:
 ```text
 20/20 checks passed
 PRODUCTION READY
 ```
 
-## Notes
+## Ghi chú
 
-- API key value is stored in Railway variables and is not committed to the repository.
-- Redis URL is stored in Railway variables and is not committed to the repository.
-- The app was deployed from `06-lab-complete` using `railway up`.
+- Giá trị thật của `AGENT_API_KEY` được lưu trong Railway variables, không commit vào repository.
+- Giá trị thật của `REDIS_URL` được lưu trong Railway variables, không commit vào repository.
+- App được deploy từ thư mục `06-lab-complete` bằng lệnh `railway up`.
+- Public URL hiện đã hoạt động và sử dụng Redis làm storage backend.
