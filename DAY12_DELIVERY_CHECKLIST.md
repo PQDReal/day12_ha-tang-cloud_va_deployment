@@ -611,7 +611,178 @@ Kết luận Exercise 4.4: cost guard hiện đã đạt yêu cầu logic chính
 ## Part 5: Scaling & Reliability
 
 ### Exercise 5.1-5.5: Implementation notes
-[Your explanations and test results]
+#### Exercise 5.1: Health checks
+
+Kiểm tra `05-scaling-reliability/develop/app.py`:
+- Đã có endpoint `/health` cho liveness probe.
+- Đã có endpoint `/ready` cho readiness probe.
+- `/health` trả status, uptime, version, environment, timestamp và memory check bằng `psutil`.
+- `/ready` kiểm tra biến `_is_ready`; nếu chưa ready thì trả `503`.
+
+Test trên port riêng `8051`:
+```text
+HEALTH:
+STATUS=200
+{"status":"ok","uptime_seconds":51.1,"version":"1.0.0","environment":"development","timestamp":"2026-06-12T10:23:08.317082+00:00","checks":{"memory":{"status":"ok","used_percent":83.7}}}
+
+READY:
+STATUS=200
+{"ready":true,"in_flight_requests":1}
+```
+
+Nhận xét: Exercise 5.1 đã đạt yêu cầu. `in_flight_requests` là `1` vì middleware tính cả request `/ready` hiện tại; không ảnh hưởng chức năng readiness.
+
+#### Exercise 5.2: Graceful shutdown
+
+Kiểm tra `05-scaling-reliability/develop/app.py`:
+- Có lifespan startup/shutdown.
+- Khi startup, app load dependency giả lập rồi set `_is_ready = True`.
+- Khi shutdown, app set `_is_ready = False`, log graceful shutdown và chờ `_in_flight_requests` hoàn thành tối đa 30 giây.
+- Có signal handler cho `SIGTERM` và `SIGINT`.
+
+Đoạn code chính:
+```python
+signal.signal(signal.SIGTERM, handle_sigterm)
+signal.signal(signal.SIGINT, handle_sigterm)
+```
+
+Test trên Windows:
+- App chạy được trên port `8052` và log startup/ready thành công.
+- Gửi `SIGTERM` bằng Python `os.kill(pid, signal.SIGTERM)` dừng được process.
+- Tuy nhiên Windows signal behavior khác Linux/macOS nên log graceful shutdown không thể hiện đầy đủ như lệnh `kill -TERM $PID` trong tài liệu Unix.
+
+Output startup:
+```text
+2026-06-12 17:27:02,200 INFO Starting agent on port 8052
+INFO:     Started server process [5296]
+INFO:     Waiting for application startup.
+2026-06-12 17:27:02,266 INFO Agent starting up...
+2026-06-12 17:27:02,267 INFO Loading model and checking dependencies...
+2026-06-12 17:27:02,467 INFO Agent is ready!
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8052 (Press CTRL+C to quit)
+```
+
+Kết luận: code graceful shutdown đã có đúng cấu trúc. Việc test signal trên Windows có giới hạn, nhưng trong container/Linux Uvicorn sẽ nhận SIGTERM và gọi lifespan shutdown.
+
+#### Exercise 5.3: Stateless design
+
+Kiểm tra `05-scaling-reliability/production/app.py`:
+- Conversation state không lưu trực tiếp trong memory khi có Redis.
+- Session/history được lưu qua các hàm `save_session()`, `load_session()`, `append_to_history()`.
+- Redis key dạng `session:{session_id}` và có TTL.
+- Response trả `served_by` để thấy request có thể được xử lý bởi nhiều instance khác nhau.
+
+Đoạn logic chính:
+```python
+if USE_REDIS:
+    _redis.setex(f"session:{session_id}", ttl_seconds, serialized)
+else:
+    _memory_store[f"session:{session_id}"] = data
+```
+
+Nhận xét: production app hỗ trợ stateless design khi chạy với Redis. Nếu chạy local không Redis thì fallback in-memory để demo, nhưng fallback này không scalable.
+
+#### Exercise 5.4: Load balancing
+
+Chạy stack:
+```bash
+cd 05-scaling-reliability/production
+docker compose up -d --scale agent=3
+```
+
+Lưu ý môi trường:
+- Folder tên `production` có thể làm Docker Compose project name bị trùng với stack Part 2. Nếu thấy image/container cũ hoặc endpoint `/chat` trả `404`, cần `docker compose down --remove-orphans` rồi chạy lại stack Part 5.
+- `docker-compose.yml` có warning `version` obsolete, nhưng không chặn chạy.
+- Tạo `.env.local` rỗng nếu Compose yêu cầu file này.
+
+Kết quả `docker compose ps`:
+```text
+NAME                 IMAGE              COMMAND                  SERVICE   STATUS
+production-agent-1   production-agent   "python -m uvicorn a..." agent     Up (healthy)
+production-agent-2   production-agent   "python -m uvicorn a..." agent     Up (healthy)
+production-agent-3   production-agent   "python -m uvicorn a..." agent     Up (healthy)
+production-nginx-1   nginx:alpine       "/docker-entrypoint..."  nginx     Up, 0.0.0.0:8080->80/tcp
+production-redis-1   redis:7-alpine     "docker-entrypoint.s..." redis     Up (healthy)
+```
+
+Health qua Nginx:
+```bash
+curl http://localhost:8080/health
+```
+
+Output:
+```text
+HTTP/1.1 200 OK
+X-Served-By: 172.19.0.5:8000
+
+{"status":"ok","uptime_seconds":10.4,"version":"2.0.0","timestamp":"2026-06-12T10:33:43.123335"}
+```
+
+Kết luận: Nginx load balancer expose `localhost:8080`, route traffic tới các agent instances, Redis healthy.
+
+#### Exercise 5.5: Test stateless
+
+Chạy:
+```bash
+python test_stateless.py
+```
+
+Output chính:
+```text
+============================================================
+Stateless Scaling Demo
+============================================================
+
+Session ID: 28addfb0-dbaa-49bf-9e6d-d98d042a67ca
+
+Request 1: [instance-e38ae2]
+Request 2: [instance-b5423d]
+Request 3: [instance-2c2036]
+Request 4: [instance-e38ae2]
+Request 5: [instance-b5423d]
+
+Total requests: 5
+Instances used: {'instance-e38ae2', 'instance-2c2036', 'instance-b5423d'}
+All requests served despite different instances!
+
+--- Conversation History ---
+Total messages: 10
+Session history preserved across all instances via Redis!
+```
+
+Test thêm failover nhẹ:
+- Dừng một instance:
+```bash
+docker stop production-agent-2
+```
+- Gửi tiếp request cùng `session_id`:
+```json
+{"session_id":"28addfb0-dbaa-49bf-9e6d-d98d042a67ca","question":"Continue after one instance stopped","answer":"Tôi là AI agent được deploy lên cloud. Câu hỏi của bạn đã được nhận.","turn":7,"served_by":"instance-e38ae2","storage":"redis"}
+```
+- Kiểm tra history:
+```text
+history_count=12
+```
+
+Kết luận Exercise 5.5: stateless design hoạt động đúng. Nhiều instance cùng xử lý một session, một instance bị stop thì request tiếp theo vẫn thành công và history vẫn còn nhờ Redis.
+
+Log agent rút gọn:
+```text
+agent-1 | Connected to Redis
+agent-1 | Starting instance instance-b5423d
+agent-1 | Storage: Redis
+agent-2 | Starting instance instance-2c2036
+agent-3 | Starting instance instance-e38ae2
+agent-1 | POST /chat HTTP/1.1" 200 OK
+agent-2 | POST /chat HTTP/1.1" 200 OK
+agent-3 | POST /chat HTTP/1.1" 200 OK
+```
+
+Sau khi test xong đã chạy:
+```bash
+docker compose down
+```
 ```
 
 ---
